@@ -12,11 +12,12 @@ mits_selection_factor_tables <- function(
   assertthat::assert_that(inherits(x, "champs_processed"),
     msg = cli::format_error("Data must come from process_data()")
   )
+  dss <- dss_transform(x$dss)
 
   ctch <- dplyr::bind_rows(
       x$ads %>%
         dplyr::select(.data$site, .data$catchment),
-      x$dss %>%
+      dss %>%
         dplyr::select(.data$site, .data$catchment)
     ) %>%
     dplyr::filter(.data$site %in% sites, .data$catchment %in% catchments) %>%
@@ -33,14 +34,14 @@ mits_selection_factor_tables <- function(
     dplyr::count(.data$site, .data$mits_flag, .data$factor, .data$level) %>%
     dplyr::filter(!is.na(.data$level))
 
-  dss_ct <- x$dss %>%
+  dss_ct <- dss %>%
     dplyr::filter(.data$site %in% sites, .data$catchment %in% catchments) %>%
     dplyr::group_by(.data$site, .data$factor, .data$level) %>%
     dplyr::summarise(n = sum(.data$n), .groups = "drop") %>%
     dplyr::mutate(mits_flag = -1)
 
   # this will give the total DSS subjects at each site so we can compute missing
-  tots <- x$dss %>%
+  tots <- dss %>%
     dplyr::filter(.data$site %in% sites, .data$catchment %in% catchments,
       .data$factor == "age") %>%
     dplyr::group_by(.data$site) %>%
@@ -97,7 +98,7 @@ mits_selection_factor_tables <- function(
 #' @param catchments a vector of catchments to include in the calculations
 #' @param champs_group CHAMPS group specifying the condition
 #' @export
-cc_factor_tables <- function(
+cond_factor_tables <- function(
   x, sites, catchments, champs_group
 ) {
   assertthat::assert_that(inherits(x, "champs_processed"),
@@ -105,13 +106,17 @@ cc_factor_tables <- function(
   )
 
   ctch <- x$ads %>%
+    dplyr::select(.data$site, .data$catchment) %>%
+    dplyr::filter(.data$site %in% sites, .data$catchment %in% catchments) %>%
     dplyr::group_by(.data$site) %>%
     dplyr::summarise(catchments = paste(sort(unique(.data$catchment)),
       collapse = ", "))
+
   tbls <- x$ads %>%
     dplyr::mutate(cc = as.numeric(
-      has_champs_group_cc(.data, !!champs_group))) %>%
-    dplyr::filter(.data$site %in% sites, .data$catchment %in% catchments) %>%
+      has_champs_group(.data, !!champs_group))) %>%
+    dplyr::filter(.data$site %in% sites, .data$catchment %in% catchments,
+      .data$mits_flag == 1, .data$decoded == 1) %>%
     dplyr::select(dplyr::any_of(c("site", "catchment", "sex", "religion",
       "education", "season", "location", "va", "age", "cc"))) %>%
     tidyr::pivot_longer(cols = -all_of(c("site", "catchment", "cc")),
@@ -145,7 +150,10 @@ cc_factor_tables <- function(
         if (fac == "age")
           x$level <- factor(x$level,
             levels = c("Stillbirth", "Neonate", "Infant", "Child"))
-        dplyr::arrange(x, .data$level)
+        x <- dplyr::arrange(x, .data$level)
+        nms <- names(x)
+        nnms <- c(nms[1], sort(nms[-1], decreasing = TRUE))
+        x[, nnms]
       }),
       pval = purrr::map_dbl(table, function(x) {
         fisher_test(as.matrix(x[, -1]))
@@ -157,19 +165,4 @@ cc_factor_tables <- function(
     dplyr::relocate("catchments", .after = "site")
 
   tblsn
-}
-
-#' @importFrom stats fisher.test
-fisher_test <- function(x) {
-  tryres <- try({
-    stats::fisher.test(x)
-  }, silent = TRUE)
-  if (inherits(tryres, "try-error")) {
-    tryres <- try({
-      stats::fisher.test(x, simulate.p.value = TRUE)
-    }, silent = TRUE)
-    if (inherits(tryres, "try-error"))
-      return(NA)
-  }
-  return(tryres$p.value)
 }

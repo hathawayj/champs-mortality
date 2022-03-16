@@ -19,22 +19,12 @@ process_data <- function(x, start_year, end_year) {
   rlgn <- x$rlgn
   seas <- x$seas
   catlkp <- x$catlkp
+  lb <- x$lb
+  dhs <- x$dhs
 
   valid_sites <- unique(ads_raw$site_name)
   valid_catchments <- unique(catlkp$catchment)
   valid_locations <- unique(ads_raw$calc_location)
-
-  valid_levels <- list(
-    # catchment = c(),
-    age = c("Stillbirth", "Neonate", "Infant", "Child"),
-    education = c("None", "Primary", "Secondary", "Tertiary"),
-    religion = c("Christian", "Hindu", "Muslim", "Other"),
-    sex = c("Male", "Female"),
-    season = c("Dry", "Rainy"),
-    location = c("facility", "community"),
-    va = c("Infection", "Trauma")
-  )
-  valid_factors <- names(valid_levels)
 
   # ------------------- analysis dataset ------------------- #
   cli::cli_h1("processing analysis dataset")
@@ -65,7 +55,7 @@ process_data <- function(x, start_year, end_year) {
     dplyr::filter(.data$n > 1)
   n_dups <- nrow(dups)
   if (n_dups > 0) {
-    mreg <- mreg %>%
+    ads_raw <- ads_raw %>%
       dplyr::group_by(.data$champsid) %>%
       filter(dplyr::row_number() == 1) %>%
       dplyr::ungroup()
@@ -89,7 +79,6 @@ process_data <- function(x, start_year, end_year) {
   cli::cli_alert_success("Created a new variable 'age' that rolls up \\
     all neonates into one category to be compatible with DSS data",
     wrap = TRUE)
-  # TODO: make sure there are not any extra categories for age
 
   ads_raw <- voc_lookup(ads_raw, voc, "caretakers_religion", "analysis dataset")
 
@@ -192,7 +181,8 @@ process_data <- function(x, start_year, end_year) {
         Unknown = as.character(NA)
       ),
       calc_sex = dplyr::recode(.data$calc_sex,
-        Indeterminate = as.character(NA)
+        Indeterminate = as.character(NA),
+        Unknown = as.character(NA)
       ),
       calc_location = dplyr::recode(.data$calc_location,
         other = as.character(NA)
@@ -203,7 +193,7 @@ process_data <- function(x, start_year, end_year) {
     what is found in DSS data:")
   ul <- cli::cli_ul()
   cli::cli_li("religion: set 'Unknown' to NA")
-  cli::cli_li("sex: set 'Indeterminate' to NA")
+  cli::cli_li("sex: set 'Indeterminate' and 'Unknown' to NA")
   cli::cli_li("location: 'other' to NA")
   cli::cli_end(ul)
 
@@ -213,20 +203,17 @@ process_data <- function(x, start_year, end_year) {
   check_valid_vals(ads_raw, "religion", valid_levels$religion,
     "religion values", "analysis dataset")
 
-  check_valid_vals(ads_raw, "sex", valid_levels$sex,
+  check_valid_vals(ads_raw, "calc_sex", valid_levels$sex,
     "sex values", "analysis dataset")
 
-  check_valid_vals(ads_raw, "location", valid_levels$location,
+  check_valid_vals(ads_raw, "calc_location", valid_levels$location,
     "location values", "analysis dataset")
 
-  check_valid_vals(ads_raw, "va", valid_levels$va,
+  check_valid_vals(ads_raw, "va_cod_iva", valid_levels$va,
     "va values", "analysis dataset")
 
-  check_valid_vals(seas, "site", valid_sites,
+  check_valid_vals(seas, "site_name", valid_sites,
     "site values", "seasons lookup")
-
-  check_valid_vals(seas, "season", valid_levels$season,
-    "season values", "seasons lookup")
 
   ads_raw$season <- NA
   for (ii in seq_len(nrow(seas))) {
@@ -236,6 +223,9 @@ process_data <- function(x, start_year, end_year) {
     ads_raw$season[idx] <- tmp$season
   }
   cli::cli_alert_success("Calculated season of death")
+
+  check_valid_vals(seas, "season", valid_levels$season,
+    "season values", "seasons lookup")
 
   ads_raw <- dplyr::rename(ads_raw,
       location = "calc_location",
@@ -255,7 +245,7 @@ process_data <- function(x, start_year, end_year) {
     msg = cli::format_error("
       {n_missing} necessary variable{?s} not found in the maternal registry \\
         dataset: {commas(missing_reg_vars)}", wrap = TRUE))
-
+  # TODO: check why this isn't being run for J
   nrm <- length(setdiff(names(mreg), reg_vars_keep))
   if (nrm > 0) {
     mreg <- mreg %>%
@@ -307,6 +297,22 @@ process_data <- function(x, start_year, end_year) {
   ads <- dplyr::left_join(ads_raw, mreg, by = "champsid")
   cli::cli_alert_success("Joined analysis dataset and maternal registry")
 
+  # -------------------------- live births ------------------------- #
+
+  cli::cli_h1("checking live births")
+
+  check_valid_vals(lb, "site", valid_sites, "sites", "live births data")
+  check_valid_vals(lb, "catchment", valid_catchments,
+    "catchments", "live births data")
+
+# -------------------------- DHS ------------------------- #
+
+  cli::cli_h1("checking DHS data")
+
+  check_valid_vals(dhs, "site", valid_sites, "sites", "live births data")
+  check_valid_vals(dhs, "catchment", valid_catchments,
+    "catchments", "live births data")
+
   # -------------------------- dss ------------------------- #
 
   cli::cli_h1("checking DSS")
@@ -314,8 +320,6 @@ process_data <- function(x, start_year, end_year) {
   check_valid_vals(dss, "site", valid_sites, "sites", "DSS data")
   check_valid_vals(dss, "catchment", valid_catchments,
     "catchments", "DSS data")
-
-  # check_valid_vals(dss, "catchment", valid_catchments, "catchments")
 
   check_valid_vals(dss, "age", valid_levels$age, "age", "DSS data")
 
@@ -333,27 +337,20 @@ process_data <- function(x, start_year, end_year) {
   check_valid_vals(filter(dss, factor == "sex"),
     "sex", valid_levels$sex, "sex values", "DSS data")
 
-  # check_valid_vals(filter(dss, factor == "season"),
-  #   "level", valid_levels$season, "seasons", "DSS data")
+  check_valid_vals(filter(dss, factor == "season"),
+    "level", valid_levels$season, "seasons", "DSS data")
+
+  # TODO: make sure period_start_year and period_end_year are constant
+  #   within a given site/catchment
 
   check_valid_vals(filter(dss, factor == "va"),
     "va", valid_levels$va, "verbal autopsy categories", "DSS data")
 
-  dss <- dplyr::bind_rows(
-    dss %>% select(!"age"),
-    dss %>%
-      dplyr::group_by(.data$site, .data$catchment, .data$age, .data$factor) %>%
-      dplyr::summarise(n = sum(.data$n), .groups = "drop") %>%
-      dplyr::group_by(.data$site, .data$catchment, .data$age) %>%
-      dplyr::summarise(n = max(.data$n)) %>%
-      mutate(factor = "age", level = .data$age) %>%
-      select(!"age")
-  )
-  cli::cli_alert_success("Folded age into factor/level form with DSS data")
-
   res <- list(
     ads = ads,
-    dss = dss
+    dss = dss,
+    lb = lb,
+    dhs = dhs
   )
   class(res) <- c("list", "champs_processed")
 
